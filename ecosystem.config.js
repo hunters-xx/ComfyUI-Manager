@@ -4,9 +4,9 @@ module.exports = {
     script: 'custom_nodes/comfyui-manager/direct_installer.py',
     args: '--resource-url https://pub-79bc862635254c60af6fca612486fdb9.r2.dev/install.json --interval 120',
     interpreter: '.venv/bin/python',
-    cwd: '../..',
+    cwd: '.',
     env: {
-      COMFYUI_PATH: '../..',
+      COMFYUI_PATH: '.',
       PYTHON_EXECUTABLE: '.venv/bin/python',
       NODE_ENV: 'production'
     },
