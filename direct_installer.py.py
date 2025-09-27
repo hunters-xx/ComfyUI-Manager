@@ -12,7 +12,6 @@ import time
 import sys
 import os
 import subprocess
-import requests
 import zipfile
 import tempfile
 import concurrent.futures
@@ -158,12 +157,14 @@ class DirectInstaller:
                 self._log_install_result(node_id, False, 'skip')
                 return False
             
-            response = requests.get(file_url)
-            response.raise_for_status()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(file_url) as response:
+                    response.raise_for_status()
+                    content = await response.read()
             
             os.makedirs(custom_nodes_dir, exist_ok=True)
             with open(node_file_path, 'wb') as f:
-                f.write(response.content)
+                f.write(content)
             
             self._log_install_result(node_id, True)
             return True
@@ -181,11 +182,13 @@ class DirectInstaller:
                 self._log_install_result(node_id, False, 'skip')
                 return False
             
-            response = requests.get(zip_url)
-            response.raise_for_status()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(zip_url) as response:
+                    response.raise_for_status()
+                    content = await response.read()
             
             with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_file:
-                temp_file.write(response.content)
+                temp_file.write(content)
                 temp_zip_path = temp_file.name
             
             with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
