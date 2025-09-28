@@ -1,13 +1,13 @@
 module.exports = {
   apps: [{
     name: 'comfyui-installer',
-    script: 'direct_installer.py',
+    script: 'custom_nodes/comfyui-manager/direct_installer.py',
     args: '--resource-url https://pub-79bc862635254c60af6fca612486fdb9.r2.dev/install.json --interval 120',
-    interpreter: '../.venv/bin/python',
-    cwd: '..',
+    interpreter: '.venv/bin/python',
+    cwd: '.',
     env: {
-      COMFYUI_PATH: '..',
-      PYTHON_EXECUTABLE: '../.venv/bin/python',
+      COMFYUI_PATH: '.',
+      PYTHON_EXECUTABLE: '.venv/bin/python',
       NODE_ENV: 'production'
     },
     instances: 1,
