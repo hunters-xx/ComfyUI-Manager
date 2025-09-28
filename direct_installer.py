@@ -127,7 +127,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("directInstaller")
 
-class DirectInstaller:
+class FileDirectInstaller:
     def __init__(self, file_url: str, interval: int = 60):
         self.file_url = file_url
         self.interval = interval
