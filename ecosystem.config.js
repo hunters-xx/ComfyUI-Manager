@@ -1,13 +1,15 @@
+const path = require('path');
+
 module.exports = {
   apps: [{
     name: 'comfyui-installer',
-    script: 'custom_nodes/comfyui-manager/direct_installer.py',
+    script: path.join(__dirname, 'direct_installer.py'),
     args: '--resource-url https://pub-79bc862635254c60af6fca612486fdb9.r2.dev/install.json --interval 120',
-    interpreter: '.venv/bin/python',
-    cwd: '.',
+    interpreter: path.join(__dirname, '..', '..', '.venv', 'bin', 'python'),
+    cwd: path.join(__dirname, '..', '..'),
     env: {
-      COMFYUI_PATH: '.',
-      PYTHON_EXECUTABLE: '.venv/bin/python',
+      COMFYUI_PATH: path.join(__dirname, '..', '..'),
+      PYTHON_EXECUTABLE: path.join(__dirname, '..', '..', '.venv', 'bin', 'python'),
       NODE_ENV: 'production'
     },
     instances: 1,
