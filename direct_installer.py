@@ -317,7 +317,7 @@ class FileDirectInstaller:
     async def install_custom_node(self, node_data: Dict) -> bool:
         """Install custom node"""
         try:
-            node_id = node_data.get("id", "")
+            node_id = node_data.get("id", "") or node_data.get("file_name", "").lower()
             install_type = node_data.get("install_type", "")
             files = node_data.get("files", [])
 
@@ -446,7 +446,8 @@ class FileDirectInstaller:
             # Process custom nodes
             new_nodes = 0
             for node_data in data.get("custom_nodes", []):
-                node_id = node_data.get("id", "")
+                # Use id if available, otherwise use file_name in lowercase
+                node_id = node_data.get("id", "") or node_data.get("file_name", "").lower()
                 # Check if already installed
                 if node_id in self.installed_nodes:
                     logger.info(f"Custom node already exists, skipping installation: {node_id}")
