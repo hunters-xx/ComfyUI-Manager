@@ -99,22 +99,33 @@ _load_config_files()
 
 class FileDirectInstaller:
     """File Unified Resource Installation Service"""
-    # Model directory names used across the codebase
+    # Model directory names used in folder_paths (valid keys only, no 'checkpoint')
     MODEL_DIR_NAMES = [
         'checkpoints', 'loras', 'vae', 'text_encoders', 'diffusion_models',
         'clip_vision', 'embeddings', 'diffusers', 'vae_approx', 'controlnet',
-        'gligen', 'upscale_models', 'hypernetworks', 'photomaker', 'classifiers', 'checkpoint'
+        'gligen', 'upscale_models', 'hypernetworks', 'photomaker', 'classifiers'
     ]
     
-    # Model directory name mapping
+    # Model directory name mapping (maps model type to folder_paths key)
+    # This matches manager_server.py model_dir_name_map
     MODEL_DIR_NAME_MAP = {
-        "checkpoints": "checkpoints", "checkpoint": "checkpoints", "unclip": "checkpoints",
-        "text_encoders": "text_encoders", "clip": "text_encoders",
-        "vae": "vae", "lora": "loras",
-        "t2i-adapter": "controlnet", "t2i-style": "controlnet", "controlnet": "controlnet",
-        "clip_vision": "clip_vision", "gligen": "gligen", "upscale": "upscale_models",
-        "embedding": "embeddings", "embeddings": "embeddings",
-        "unet": "diffusion_models", "diffusion_model": "diffusion_models",
+        "checkpoints": "checkpoints",
+        "checkpoint": "checkpoints",  # Map 'checkpoint' to 'checkpoints'
+        "unclip": "checkpoints",
+        "text_encoders": "text_encoders",
+        "clip": "text_encoders",
+        "vae": "vae",
+        "lora": "loras",
+        "t2i-adapter": "controlnet",
+        "t2i-style": "controlnet",
+        "controlnet": "controlnet",
+        "clip_vision": "clip_vision",
+        "gligen": "gligen",
+        "upscale": "upscale_models",
+        "embedding": "embeddings",
+        "embeddings": "embeddings",
+        "unet": "diffusion_models",
+        "diffusion_model": "diffusion_models",
     }
     def __init__(self, file_url: str, interval: int = DEFAULT_INTERVAL):
         self.file_url = file_url
@@ -136,54 +147,92 @@ class FileDirectInstaller:
         return self._custom_nodes_dir
 
     def _get_model_dir(self, save_path: str, model_type: str) -> str:
-        """Get model directory path based on save_path and model_type"""
-        if save_path == "default":
-            # Use default path mapping
-            model_dir_name = self.MODEL_DIR_NAME_MAP.get(model_type.lower(), model_type)
-            if model_dir_name == "upscale":
-                model_dir_name = "upscale_models"
-            elif model_dir_name == "checkpoint":
-                model_dir_name = "checkpoints"
-            return os.path.join(folder_paths.models_dir, model_dir_name)
+        """Get model directory path based on save_path and model_type - matches manager_server.py get_model_dir"""
+        # Get models base directory
+        if 'download_model_base' in folder_paths.folder_names_and_paths:
+            models_base = folder_paths.folder_names_and_paths['download_model_base'][0][0]
         else:
-            # Use custom path, correct path mapping
-            if save_path.startswith('checkpoints/'):
-                corrected_path = save_path.replace('checkpoints/', 'checkpoint/')
-                return os.path.join(folder_paths.models_dir, corrected_path)
-            return os.path.join(folder_paths.models_dir, save_path)
+            models_base = folder_paths.models_dir
+        
+        if save_path == "default":
+            # Use model_dir_name_map to get the correct folder_paths key
+            model_dir_name = self.MODEL_DIR_NAME_MAP.get(model_type.lower())
+            if model_dir_name is not None:
+                # Use folder_paths to get the actual directory path
+                return folder_paths.folder_names_and_paths[model_dir_name][0][0]
+            else:
+                # Unknown type, save to etc
+                return os.path.join(models_base, "etc")
+        else:
+            # Use custom path
+            # Validate to prevent path traversal
+            if '..' in save_path or save_path.startswith('/'):
+                logger.warning(f"Invalid save_path '{save_path}', saving to models/etc")
+                return os.path.join(models_base, "etc")
+            return os.path.join(models_base, save_path)
 
     @staticmethod
     def check_model_installed(json_obj):
-        """Check if model is already installed"""
+        """Check if model is already installed - matches manager_server.py logic"""
         def is_exists(model_dir_name, filename, url):
             if filename == HUGGINGFACE_PLACEHOLDER:
                 filename = os.path.basename(url)
-            return any(os.path.exists(os.path.join(d, filename)) for d in folder_paths.get_folder_paths(model_dir_name))
+            
+            try:
+                dirs = folder_paths.get_folder_paths(model_dir_name)
+                for x in dirs:
+                    if os.path.exists(os.path.join(x, filename)):
+                        return True
+            except (KeyError, AttributeError):
+                pass
+            return False
 
-        # Get all installed model files
-        total_models_files = {f for dir_name in FileDirectInstaller.MODEL_DIR_NAMES for f in folder_paths.get_filename_list(dir_name)}
+        # Get all installed model files from valid folder_paths directories
+        total_models_files = set()
+        for dir_name in FileDirectInstaller.MODEL_DIR_NAMES:
+            try:
+                for filename in folder_paths.get_filename_list(dir_name):
+                    total_models_files.add(filename)
+            except (AttributeError, KeyError, OSError):
+                pass
 
-        def process_model(item):
-            # Check common filename
-            if not any(x in item['filename'] for x in ['diffusion', 'pytorch', 'model']):
-                if item['filename'] in total_models_files:
-                    item['installed'] = 'True'
-                    return
+        def process_model_phase(item):
+            """Process a single model - matches manager_server.py logic"""
+            try:
+                # Check common filename (non-general name case)
+                if 'diffusion' not in item['filename'] and 'pytorch' not in item['filename'] and 'model' not in item['filename']:
+                    if item['filename'] in total_models_files:
+                        item['installed'] = 'True'
+                        return
 
-            # Check default path
-            if item['save_path'] == 'default':
-                model_dir = FileDirectInstaller.MODEL_DIR_NAME_MAP.get(item['type'].lower())
-                item['installed'] = str(is_exists(model_dir, item['filename'], item['url'])) if model_dir else 'False'
-            else:
-                # Check custom path - directly check full path
-                filename = os.path.basename(item['url']) if item['filename'] == HUGGINGFACE_PLACEHOLDER else item['filename']
-                save_path = item['save_path'].replace('checkpoints/', 'checkpoint/')
-                fullpath = os.path.join(folder_paths.models_dir, save_path, filename)
-                item['installed'] = 'True' if os.path.exists(fullpath) else 'False'
+                # Check default path
+                if item.get('save_path') == 'default':
+                    model_dir_name = FileDirectInstaller.MODEL_DIR_NAME_MAP.get(item.get('type', '').lower())
+                    if model_dir_name is not None:
+                        item['installed'] = str(is_exists(model_dir_name, item['filename'], item.get('url', '')))
+                    else:
+                        item['installed'] = 'False'
+                else:
+                    # Check custom path
+                    model_dir_name = item.get('save_path', '').split('/')[0]
+                    if model_dir_name in folder_paths.folder_names_and_paths:
+                        if is_exists(model_dir_name, item['filename'], item.get('url', '')):
+                            item['installed'] = 'True'
+
+                    if 'installed' not in item:
+                        if item.get('filename') == HUGGINGFACE_PLACEHOLDER:
+                            filename = os.path.basename(item.get('url', ''))
+                        else:
+                            filename = item['filename']
+                        fullpath = os.path.join(folder_paths.models_dir, item.get('save_path', ''), filename)
+                        item['installed'] = 'True' if os.path.exists(fullpath) else 'False'
+            except (KeyError, AttributeError, TypeError) as e:
+                # If any error occurs, mark as not installed
+                item['installed'] = 'False'
 
         with concurrent.futures.ThreadPoolExecutor(MAX_WORKERS) as executor:
-            futures = [executor.submit(process_model, item) for item in json_obj['models']]
-            concurrent.futures.wait(futures)  # Wait for all tasks to complete
+            for item in json_obj['models']:
+                executor.submit(process_model_phase, item)
 
     def _log_install_result(self, item_id: str, success: bool, action: str = None, error_msg: str = None):
         """Unified installation result logging"""
@@ -577,7 +626,7 @@ class FileDirectInstaller:
             
             # Get model save path and type
             save_path = model_data.get("save_path", "default")
-            model_type = model_data.get("type", "checkpoint")
+            model_type = model_data.get("type", "checkpoints")  # Use 'checkpoints' instead of 'checkpoint'
             
             # Get model directory using helper method
             model_dir = self._get_model_dir(save_path, model_type)
@@ -674,20 +723,33 @@ class FileDirectInstaller:
             new_models = 0
             skipped_models = 0
             for model_data in data.get("models", []):
-                model_name = model_data.get("filename", "")
-                
-                # Use manager_server check_model_installed logic to check if model is installed
-                temp_json_obj = {"models": [model_data.copy()]}
-                self.check_model_installed(temp_json_obj)
-                
-                # Check if model is already installed
-                if temp_json_obj["models"][0].get('installed') == 'True':
-                    skipped_models += 1
-                    logger.debug(f"Model already exists, skipping installation: {model_name}")
+                try:
+                    model_name = model_data.get("filename", "")
+                    if not model_name:
+                        logger.warning(f"Skipping model with empty filename: {model_data}")
+                        continue
+                    
+                    # Use manager_server check_model_installed logic to check if model is installed
+                    temp_json_obj = {"models": [model_data.copy()]}
+                    try:
+                        self.check_model_installed(temp_json_obj)
+                    except Exception as e:
+                        logger.warning(f"Failed to check if model is installed: {model_name}, error: {e}, will try to install")
+                        # If check fails, assume not installed and try to install
+                        temp_json_obj["models"][0]['installed'] = 'False'
+                    
+                    # Check if model is already installed
+                    if temp_json_obj["models"][0].get('installed') == 'True':
+                        skipped_models += 1
+                        logger.debug(f"Model already exists, skipping installation: {model_name}")
+                        continue
+                    
+                    logger.info(f"Model {model_name} not found, starting download...")
+                    if await self.install_model(model_data):
+                        new_models += 1
+                except Exception as e:
+                    logger.error(f"Failed to process model {model_data.get('filename', 'unknown')}: {e}")
                     continue
-                
-                if await self.install_model(model_data):
-                    new_models += 1
 
             logger.info(f"Model processing completed: new {new_models}, skipped {skipped_models}")
 
