@@ -1,16 +1,23 @@
 const path = require('path');
 
+const restartCommand = process.env.RESTART_COMMAND || '';
+let args = '--resource-url https://pub-79bc862635254c60af6fca612486fdb9.r2.dev/install.json --interval 120';
+if (restartCommand) {
+  args += ` --restart-command "${restartCommand}"`;
+}
+
 module.exports = {
   apps: [{
     name: 'comfyui-installer',
     script: path.join(__dirname, 'direct_installer.py'),
-    args: '--resource-url https://pub-79bc862635254c60af6fca612486fdb9.r2.dev/install.json --interval 120',
+    args: args,
     interpreter: path.join(__dirname, '..', '..', '.venv', 'bin', 'python'),
     cwd: path.join(__dirname, '..', '..'),
     env: {
       COMFYUI_PATH: path.join(__dirname, '..', '..'),
       PYTHON_EXECUTABLE: path.join(__dirname, '..', '..', '.venv', 'bin', 'python'),
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      RESTART_COMMAND: restartCommand
     },
     instances: 1,
     autorestart: true,
