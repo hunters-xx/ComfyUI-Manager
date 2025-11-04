@@ -127,9 +127,10 @@ class FileDirectInstaller:
         "unet": "diffusion_models",
         "diffusion_model": "diffusion_models",
     }
-    def __init__(self, file_url: str, interval: int = DEFAULT_INTERVAL):
+    def __init__(self, file_url: str, interval: int = DEFAULT_INTERVAL, restart_command: Optional[str] = None):
         self.file_url = file_url
         self.interval = interval
+        self.restart_command = restart_command or os.environ.get('COMFYUI_RESTART_COMMAND')
         self.installed_nodes: Set[str] = set()
         self.installed_models: Set[str] = set()
         self.running = False
@@ -139,6 +140,7 @@ class FileDirectInstaller:
         self._custom_nodes_dir: Optional[str] = None  # Cache custom nodes directory
         self._system_deps_checked: bool = False  # Cache system dependency check result
         self._system_deps_ok: bool = True  # Default to True to allow installation
+        self._pending_restart: bool = False  # Flag to indicate if restart is needed
 
     def _get_custom_nodes_dir(self) -> str:
         """Get custom nodes directory (with cache)"""
@@ -752,9 +754,45 @@ class FileDirectInstaller:
                     continue
 
             logger.info(f"Model processing completed: new {new_models}, skipped {skipped_models}")
+            
+            # Mark restart needed if any new installations
+            if new_nodes > 0 or new_models > 0:
+                self._pending_restart = True
+                logger.info(f"New installations detected: {new_nodes} nodes, {new_models} models. Restart may be needed.")
 
         except (KeyError, AttributeError, TypeError) as e:
             logger.error(f"Failed to process unified resource data: {e}")
+    
+    async def execute_restart_command(self):
+        """Execute restart command if configured"""
+        if not self.restart_command:
+            return
+        
+        if not self._pending_restart:
+            logger.debug("No pending restart needed")
+            return
+        
+        try:
+            logger.info(f"Executing restart command: {self.restart_command}")
+            # Use shell=True to support complex commands
+            result = subprocess.run(
+                self.restart_command,
+                shell=True,
+                timeout=30,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                logger.info("✅ Restart command executed successfully")
+                self._pending_restart = False
+            else:
+                logger.warning(f"Restart command returned non-zero exit code: {result.returncode}")
+                if result.stderr:
+                    logger.warning(f"Restart command stderr: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.error("Restart command execution timeout")
+        except Exception as e:
+            logger.error(f"Failed to execute restart command: {e}")
 
     async def run(self):
         """Run main loop"""
@@ -777,6 +815,10 @@ class FileDirectInstaller:
                         logger.info(f"Version change detected: {self._last_version} -> {current_version}, starting to process update")
                         await self.process_unified_data(data)
                         self._last_version = current_version
+                        
+                        # Execute restart command if needed and configured
+                        if self._pending_restart:
+                            await self.execute_restart_command()
                     else:
                         logger.info(f"No version change ({current_version}), skipping processing")
                 else:
@@ -800,13 +842,14 @@ def main():
     parser.add_argument("--resource-url", required=True, help="File JSON file URL")
     parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL, help="Check interval (seconds)")
     parser.add_argument("--comfyui-path", help="ComfyUI path (deprecated, kept for compatibility)")
-    parser.add_argument("--restart-command", help="Restart command (deprecated, kept for compatibility)")
+    parser.add_argument("--restart-command", help="Restart command to execute after new installations (e.g., 'pm2 restart comfyui' or 'systemctl restart comfyui')")
 
     args = parser.parse_args()
 
     installer = FileDirectInstaller(
         file_url=args.resource_url,
-        interval=args.interval
+        interval=args.interval,
+        restart_command=args.restart_command
     )
 
     try:
