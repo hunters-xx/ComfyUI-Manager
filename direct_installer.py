@@ -126,6 +126,8 @@ class FileDirectInstaller:
         self._cache_timestamp = 0
         self._last_version: Optional[str] = None  # Record last processed version number
         self._custom_nodes_dir: Optional[str] = None  # Cache custom nodes directory
+        self._system_deps_checked: bool = False  # Cache system dependency check result
+        self._system_deps_ok: bool = True  # Default to True to allow installation
 
     def _get_custom_nodes_dir(self) -> str:
         """Get custom nodes directory (with cache)"""
@@ -337,10 +339,12 @@ class FileDirectInstaller:
         """Get list of installed models"""
         try:
             total_models_files = set()
-            for dir_name in FileDirectInstaller.MODEL_DIR_NAMES:
+            # Filter out 'checkpoint' as it's not a valid folder_paths key (use 'checkpoints' instead)
+            valid_dir_names = [d for d in FileDirectInstaller.MODEL_DIR_NAMES if d != 'checkpoint']
+            for dir_name in valid_dir_names:
                 try:
                     total_models_files.update(folder_paths.get_filename_list(dir_name))
-                except (AttributeError, OSError) as e:
+                except (AttributeError, KeyError, OSError) as e:
                     logger.debug(f"Failed to get files from {dir_name}: {e}")
                     pass
                     
@@ -397,6 +401,14 @@ class FileDirectInstaller:
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
             return False
 
+    def _needs_sudo(self) -> bool:
+        """Check if sudo is needed (not root user)"""
+        try:
+            return os.geteuid() != 0
+        except AttributeError:
+            # On Windows, geteuid doesn't exist, assume no sudo needed
+            return False
+
     async def install_system_dependencies(self, dependencies: List[str], os_type: str) -> bool:
         """Install system dependencies automatically"""
         try:
@@ -405,14 +417,26 @@ class FileDirectInstaller:
                 logger.error("No suitable package manager found")
                 return False
 
+            # Check if sudo is needed and available
+            use_sudo = self._needs_sudo()
+            if use_sudo and not shutil.which("sudo"):
+                logger.warning("sudo is required but not found, skipping automatic installation")
+                return False
+
             logger.info(f"Installing system dependencies using {package_manager}...")
             
+            def run_command(cmd, timeout):
+                """Helper to run command with or without sudo"""
+                if use_sudo:
+                    cmd = ['sudo'] + cmd
+                return subprocess.run(cmd, check=True, timeout=timeout)
+            
             if os_type == "ubuntu" and package_manager == "apt":
-                subprocess.run(['sudo', 'apt', 'update'], check=True, timeout=SUBPROCESS_TIMEOUT_MEDIUM)
-                result = subprocess.run(['sudo', 'apt', 'install', '-y'] + dependencies, check=True, timeout=SUBPROCESS_TIMEOUT_LONG)
+                run_command(['apt', 'update'], SUBPROCESS_TIMEOUT_MEDIUM)
+                result = run_command(['apt', 'install', '-y'] + dependencies, SUBPROCESS_TIMEOUT_LONG)
                 return result.returncode == 0
             elif os_type == "centos" and package_manager in ["yum", "dnf"]:
-                result = subprocess.run(['sudo', package_manager, 'install', '-y'] + dependencies, check=True, timeout=SUBPROCESS_TIMEOUT_LONG)
+                result = run_command([package_manager, 'install', '-y'] + dependencies, SUBPROCESS_TIMEOUT_LONG)
                 return result.returncode == 0
             elif os_type == "macos" and package_manager == "brew":
                 result = subprocess.run(['brew', 'install'] + dependencies, check=True, timeout=SUBPROCESS_TIMEOUT_LONG)
@@ -425,12 +449,19 @@ class FileDirectInstaller:
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to install system dependencies: {e}")
             return False
+        except FileNotFoundError as e:
+            logger.error(f"Command not found: {e}")
+            return False
         except Exception as e:
             logger.error(f"Unexpected error installing system dependencies: {e}")
             return False
 
-    async def check_system_dependencies(self, data: Dict = None) -> bool:
+    async def check_system_dependencies(self, data: Dict = None, force_recheck: bool = False) -> bool:
         """Check if system dependencies meet requirements"""
+        # Use cached result if already checked
+        if self._system_deps_checked and not force_recheck:
+            return self._system_deps_ok
+            
         try:
             # Get system dependencies from data if available
             if data and 'system_dependencies' in data:
@@ -443,6 +474,8 @@ class FileDirectInstaller:
             
             if not required_deps:
                 logger.info("No system dependencies required")
+                self._system_deps_checked = True
+                self._system_deps_ok = True
                 return True
             
             logger.info(f"Checking system dependencies for {os_type}...")
@@ -459,18 +492,28 @@ class FileDirectInstaller:
                 logger.info("Attempting to install missing dependencies automatically...")
                 if await self.install_system_dependencies(missing_deps, os_type):
                     logger.info("✅ System dependencies installed successfully")
+                    self._system_deps_checked = True
+                    self._system_deps_ok = True
                     return True
                 else:
                     logger.error("❌ Failed to install system dependencies automatically")
                     logger.info(f"Please install manually: {', '.join(missing_deps)}")
-                    return False
+                    # Don't block installation if dependencies are missing, just warn
+                    logger.warning("Continuing with installation despite missing dependencies...")
+                    self._system_deps_checked = True
+                    self._system_deps_ok = True  # Allow installation to continue
+                    return True
             
             logger.info("✅ All system dependencies are satisfied")
+            self._system_deps_checked = True
+            self._system_deps_ok = True
             return True
             
         except (KeyError, AttributeError, TypeError) as e:
             logger.error(f"Failed to check system dependencies: {e}")
-            return True  # Continue execution even if dependency check fails
+            self._system_deps_checked = True
+            self._system_deps_ok = True  # Continue execution even if dependency check fails
+            return True
 
     async def install_custom_node(self, node_data: Dict, system_data: Dict = None) -> bool:
         """Install custom node"""
@@ -482,10 +525,10 @@ class FileDirectInstaller:
             if not node_id:
                 return False
             
-            # Check system dependencies with data from install.json
-            if not await self.check_system_dependencies(system_data):
-                logger.warning(f"System dependency check failed, skipping node installation: {node_id}")
-                return False
+            # System dependencies are checked once in process_unified_data, skip here to avoid duplicate checks
+            # Only check if not already checked (shouldn't happen, but just in case)
+            if not self._system_deps_checked:
+                await self.check_system_dependencies(system_data)
 
             # Check installation type and select appropriate installation method
             if install_type == "git-clone" and files:
