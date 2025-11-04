@@ -20,10 +20,6 @@ import platform
 import shutil
 from typing import Dict, Set, List, Optional, Tuple
 from datetime import datetime
-import manager_core as core
-import manager_util
-import cm_global
-import folder_paths
 
 # Constants
 CACHE_TIMEOUT = 30  # Cache timeout in seconds
@@ -39,12 +35,18 @@ SUBPROCESS_TIMEOUT_SHORT = 5  # Short timeout for subprocess commands
 SUBPROCESS_TIMEOUT_MEDIUM = 60  # Medium timeout for subprocess commands
 SUBPROCESS_TIMEOUT_LONG = 300  # Long timeout for subprocess commands
 
-# Set paths
+# Set paths first before importing modules from glob directory
 comfy_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 manager_path = os.path.join(comfy_path, "custom_nodes", "comfyui-manager")
 
 for path in [comfy_path, manager_path, os.path.join(manager_path, "glob")]:
     sys.path.insert(0, path)
+
+# Import modules after paths are set
+import manager_core as core
+import manager_util
+import cm_global
+import folder_paths
 
 # Ensure using virtual environment Python path
 manager_util.add_python_path_to_env()
