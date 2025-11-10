@@ -517,9 +517,12 @@ class FileDirectInstaller:
             # Get system dependencies from data if available
             if data and 'system_dependencies' in data:
                 os_type = self.detect_os_type()
+                logger.info(f"Detected OS type: {os_type}")
                 required_deps = data['system_dependencies'].get(os_type, [])
+                logger.info(f"Required dependencies for {os_type}: {required_deps}")
             else:
                 # Fallback to default dependencies
+                logger.info("No system_dependencies found in config, using defaults")
                 required_deps = ['libjpeg-dev', 'libpng-dev', 'libtiff-dev', 'libfreetype-dev']
                 os_type = DEFAULT_OS_TYPE
             
